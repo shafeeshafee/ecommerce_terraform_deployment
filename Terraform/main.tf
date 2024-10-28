@@ -1,9 +1,22 @@
-
 # Configure AWS Provider
 provider "aws" {
   region     = var.aws_region
   access_key = var.aws_access_key
   secret_key = var.aws_secret_key
+}
+
+# Data source to get the default VPC
+data "aws_vpc" "default" {
+  default = true
+}
+
+# Get the main route table for the default VPC
+data "aws_route_table" "default_main" {
+  vpc_id = data.aws_vpc.default.id
+  filter {
+    name   = "association.main"
+    values = ["true"]
+  }
 }
 
 # VPC
@@ -17,12 +30,37 @@ resource "aws_vpc" "ecommerce_vpc" {
   }
 }
 
+# VPC Peering Connection
+resource "aws_vpc_peering_connection" "default_to_custom" {
+  vpc_id      = data.aws_vpc.default.id
+  peer_vpc_id = aws_vpc.ecommerce_vpc.id
+  auto_accept = true
+
+  tags = {
+    Name = "default-to-custom-peering"
+  }
+}
+
 # Internet Gateway
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.ecommerce_vpc.id
 
   tags = {
     Name = "ecommerce-igw"
+  }
+}
+
+# Public Route Table
+resource "aws_route_table" "public_rt" {
+  vpc_id = aws_vpc.ecommerce_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+
+  tags = {
+    Name = "public-rt"
   }
 }
 
@@ -47,6 +85,17 @@ resource "aws_subnet" "public_subnet_az2" {
   tags = {
     Name = "public-subnet-az2"
   }
+}
+
+# Route Table Associations for public subnets
+resource "aws_route_table_association" "public_rt_assoc_az1" {
+  subnet_id      = aws_subnet.public_subnet_az1.id
+  route_table_id = aws_route_table.public_rt.id
+}
+
+resource "aws_route_table_association" "public_rt_assoc_az2" {
+  subnet_id      = aws_subnet.public_subnet_az2.id
+  route_table_id = aws_route_table.public_rt.id
 }
 
 # Private Subnets
@@ -87,7 +136,7 @@ resource "aws_eip" "nat_eip_az2" {
   }
 }
 
-# NAT Gateways - one per AZ
+# NAT Gateways
 resource "aws_nat_gateway" "nat_gateway_az1" {
   allocation_id = aws_eip.nat_eip_az1.id
   subnet_id     = aws_subnet.public_subnet_az1.id
@@ -106,7 +155,7 @@ resource "aws_nat_gateway" "nat_gateway_az2" {
   }
 }
 
-# Route Tables - modified for each AZ's NAT Gateway
+# Private Route Tables
 resource "aws_route_table" "private_rt_az1" {
   vpc_id = aws_vpc.ecommerce_vpc.id
 
@@ -133,15 +182,41 @@ resource "aws_route_table" "private_rt_az2" {
   }
 }
 
-# Route Table Associations - updated for separate route tables
-resource "aws_route_table_association" "private_rt_assoc_1" {
+# Route Table Associations for private subnets
+resource "aws_route_table_association" "private_rt_assoc_az1" {
   subnet_id      = aws_subnet.private_subnet_az1.id
   route_table_id = aws_route_table.private_rt_az1.id
 }
 
-resource "aws_route_table_association" "private_rt_assoc_2" {
+resource "aws_route_table_association" "private_rt_assoc_az2" {
   subnet_id      = aws_subnet.private_subnet_az2.id
   route_table_id = aws_route_table.private_rt_az2.id
+}
+
+# VPC Peering Routes in Custom VPC
+resource "aws_route" "custom_vpc_public_rt_to_default_vpc" {
+  route_table_id            = aws_route_table.public_rt.id
+  destination_cidr_block    = data.aws_vpc.default.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
+}
+
+resource "aws_route" "custom_vpc_private_rt_az1_to_default_vpc" {
+  route_table_id            = aws_route_table.private_rt_az1.id
+  destination_cidr_block    = data.aws_vpc.default.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
+}
+
+resource "aws_route" "custom_vpc_private_rt_az2_to_default_vpc" {
+  route_table_id            = aws_route_table.private_rt_az2.id
+  destination_cidr_block    = data.aws_vpc.default.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
+}
+
+# VPC Peering Route in Default VPC
+resource "aws_route" "default_vpc_route_to_custom_vpc" {
+  route_table_id            = data.aws_route_table.default_main.id
+  destination_cidr_block    = aws_vpc.ecommerce_vpc.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
 }
 
 # Security Groups
@@ -171,7 +246,7 @@ resource "aws_security_group" "frontend_security_group" {
     from_port   = 9100
     to_port     = 9100
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [data.aws_vpc.default.cidr_block]
   }
 
   egress {
@@ -212,7 +287,7 @@ resource "aws_security_group" "backend_security_group" {
     from_port   = 9100
     to_port     = 9100
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [data.aws_vpc.default.cidr_block]
   }
 
   egress {
@@ -270,7 +345,7 @@ resource "aws_lb_listener" "frontend_listener" {
   }
 }
 
-# Frontend EC2 Instances with user data
+# Frontend EC2 Instances
 resource "aws_instance" "ecommerce_frontend_az1" {
   ami           = "ami-0c7217cdde317cfec" # Ubuntu 22.04 LTS in us-east-1
   instance_type = var.instance_type
@@ -280,7 +355,7 @@ resource "aws_instance" "ecommerce_frontend_az1" {
   vpc_security_group_ids      = [aws_security_group.frontend_security_group.id]
   associate_public_ip_address = true
 
-  user_data = templatefile("${path.root}/../scripts/frontend_user_data.sh", {
+  user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
     backend_private_ip = aws_instance.ecommerce_backend_az1.private_ip
   })
 
@@ -300,7 +375,7 @@ resource "aws_instance" "ecommerce_frontend_az2" {
   vpc_security_group_ids      = [aws_security_group.frontend_security_group.id]
   associate_public_ip_address = true
 
-  user_data = templatefile("${path.root}/../scripts/frontend_user_data.sh", {
+  user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
     backend_private_ip = aws_instance.ecommerce_backend_az2.private_ip
   })
 
@@ -311,7 +386,7 @@ resource "aws_instance" "ecommerce_frontend_az2" {
   depends_on = [aws_instance.ecommerce_backend_az2]
 }
 
-# Backend EC2 Instances with user data
+# Backend EC2 Instances
 resource "aws_instance" "ecommerce_backend_az1" {
   ami           = "ami-0c7217cdde317cfec" # Ubuntu 22.04 LTS in us-east-1
   instance_type = var.instance_type
@@ -320,11 +395,11 @@ resource "aws_instance" "ecommerce_backend_az1" {
   subnet_id              = aws_subnet.private_subnet_az1.id
   vpc_security_group_ids = [aws_security_group.backend_security_group.id]
 
-  user_data = templatefile("${path.root}/../scripts/backend_user_data.sh", {
+  user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
     db_name      = var.db_name
     db_username  = var.db_username
     db_password  = var.db_password
-    rds_endpoint = aws_db_instance.postgres_db.endpoint
+    rds_endpoint = aws_db_instance.postgres_db.address
   })
 
   tags = {
@@ -342,11 +417,11 @@ resource "aws_instance" "ecommerce_backend_az2" {
   subnet_id              = aws_subnet.private_subnet_az2.id
   vpc_security_group_ids = [aws_security_group.backend_security_group.id]
 
-  user_data = templatefile("${path.root}/../scripts/backend_user_data.sh", {
+  user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
     db_name      = var.db_name
     db_username  = var.db_username
     db_password  = var.db_password
-    rds_endpoint = aws_db_instance.postgres_db.endpoint
+    rds_endpoint = aws_db_instance.postgres_db.address
   })
 
   tags = {
