@@ -50,6 +50,8 @@ pipeline {
 
                             echo "Building frontend application..."
                             cd ${FRONTEND_DIR}
+                            export NODE_OPTIONS=--openssl-legacy-provider
+                            export CI=false
                             npm ci  # Performs a clean install based on package-lock.json
                             npm run build
                             cd ..
@@ -96,6 +98,7 @@ pipeline {
                             echo "Running frontend tests..."
                             cd ${FRONTEND_DIR}
                             export NODE_OPTIONS=--openssl-legacy-provider
+                            export CI=false
                             npm test -- --ci --coverage || echo "No frontend tests configured"
                             cd ..
                         '''
