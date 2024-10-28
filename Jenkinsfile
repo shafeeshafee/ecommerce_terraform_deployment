@@ -95,6 +95,7 @@ pipeline {
 
                             echo "Running frontend tests..."
                             cd ${FRONTEND_DIR}
+                            export NODE_OPTIONS=--openssl-legacy-provider
                             npm test -- --ci --coverage || echo "No frontend tests configured"
                             cd ..
                         '''
