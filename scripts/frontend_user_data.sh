@@ -38,7 +38,7 @@ retry_command sudo apt install -y nodejs git
 # Install Node Exporter for monitoring
 echo "Installing Node Exporter..."
 cd /home/ubuntu
-NODE_EXPORTER_VERSION="1.6.1"
+NODE_EXPORTER_VERSION="1.8.2"
 wget https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz
 tar xvfz node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz
 cd node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64
