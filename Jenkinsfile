@@ -44,8 +44,9 @@ pipeline {
                             pip install -r ${BACKEND_DIR}/requirements.txt
 
                             echo "Installing Node.js LTS..."
-                            curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-                            sudo apt install -y nodejs
+                            curl -fsSL https://deb.nodesource.com/setup_lts.x > setup_node.sh
+                            DEBIAN_FRONTEND=noninteractive sudo -E bash setup_node.sh
+                            DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y nodejs
 
                             echo "Building frontend application..."
                             cd ${FRONTEND_DIR}
