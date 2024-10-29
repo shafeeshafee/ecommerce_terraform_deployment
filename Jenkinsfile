@@ -223,30 +223,42 @@ pipeline {
         stage('Configure Database') {
             steps {
                 withCredentials([
-                    string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')
+                    string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD'),
+                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY')
                 ]) {
                     script {
                         try {
                             sh '''#!/bin/bash
                                 set -e
+                                # Set AWS credentials for CLI
+                                export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                                export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+                                
                                 echo "Waiting for RDS instance to become available..."
                                 aws rds wait db-instance-available --db-instance-identifier ecommerce-db
+                                
                                 echo "Retrieving RDS endpoint from Terraform outputs..."
                                 cd ${TERRAFORM_DIR}
                                 RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
                                 cd ..
+                                
                                 echo "Activating Python virtual environment..."
                                 source ${PYTHON_VENV}/bin/activate
                                 cd ${BACKEND_DIR}
+                                
                                 echo "Exporting existing database data..."
                                 python manage.py dumpdata --database=sqlite \
                                     --natural-foreign --natural-primary \
                                     -e contenttypes -e auth.Permission --indent 4 > datadump.json
+                                    
                                 echo "Updating database settings for PostgreSQL..."
                                 sed -i 's/DATABASES = {/DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql","NAME": "ecommercedb","USER": "kurac5user","PASSWORD": "'$DB_PASSWORD'","HOST": "'$RDS_ENDPOINT'","PORT": "5432"},/g' my_project/settings.py
+                                
                                 echo "Applying database migrations..."
                                 python manage.py makemigrations account payments product
                                 python manage.py migrate
+                                
                                 echo "Importing data into the new database..."
                                 python manage.py loaddata datadump.json
                             '''
