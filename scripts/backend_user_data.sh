@@ -101,7 +101,84 @@ if [ -z "${db_name}" ] || [ -z "${db_username}" ] || [ -z "${db_password}" ] || 
     exit 1
 fi
 
-# Update Django settings
+# Create a temporary settings file for migration
+cat > my_project/temp_settings.py <<EOF
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+SECRET_KEY = 'django-insecure-*7!!kc@bmtx8ngui6lr@xmifmcwm6y%hnbe)rdei(b!ds8t)uq'
+DEBUG = True
+ALLOWED_HOSTS = ['$PRIVATE_IP']
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'rest_framework',
+    'corsheaders',
+    'product',
+    'payments',
+    'account',
+]
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': '${db_name}',
+        'USER': '${db_username}',
+        'PASSWORD': '${db_password}',
+        'HOST': '${rds_endpoint}',
+        'PORT': '5432',
+    },
+    'sqlite': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+EOF
+
+# Set the Django settings module to our temporary settings
+export DJANGO_SETTINGS_MODULE=my_project.temp_settings
+
+# Wait for database to be ready
+wait_for_database
+
+# Database setup with retry
+echo "Setting up database..."
+retry_command python manage.py makemigrations account
+retry_command python manage.py makemigrations payments
+retry_command python manage.py makemigrations product
+retry_command python manage.py migrate
+
+# Migrate data with error handling
+echo "Migrating data..."
+if python manage.py dumpdata --database=sqlite \
+    --natural-foreign --natural-primary \
+    -e contenttypes -e auth.Permission \
+    -e sessions.session \
+    --indent 4 > datadump.json; then
+    retry_command python manage.py loaddata datadump.json
+else
+    echo "Error: Failed to dump data from SQLite"
+    exit 1
+fi
+
+# Verify the migration
+echo "Verifying migration..."
+python manage.py shell <<EOF
+from django.contrib.auth.models import User
+user_count = User.objects.count()
+print(f"Successfully migrated {user_count} users")
+if user_count == 0:
+    exit(1)
+EOF
+
+# Update the actual settings.py file
+echo "Updating final Django settings..."
 sed -i "s/ALLOWED_HOSTS = \[\]/ALLOWED_HOSTS = \['$PRIVATE_IP'\]/" my_project/settings.py
 sed -i "s|'ENGINE': 'django.db.backends.sqlite3'|'ENGINE': 'django.db.backends.postgresql'|" my_project/settings.py
 sed -i "s|'NAME': BASE_DIR / 'db.sqlite3',|'NAME': '${db_name}', 'USER': '${db_username}', 'PASSWORD': '${db_password}', 'HOST': '${rds_endpoint}', 'PORT': '5432',|" my_project/settings.py
@@ -116,6 +193,7 @@ After=network.target
 User=ubuntu
 WorkingDirectory=/home/ubuntu/ecommerce_terraform_deployment/backend
 Environment="PATH=/home/ubuntu/ecommerce_terraform_deployment/backend/venv/bin"
+Environment="DJANGO_SETTINGS_MODULE=my_project.settings"
 ExecStart=/home/ubuntu/ecommerce_terraform_deployment/backend/venv/bin/python manage.py runserver 0.0.0.0:8000
 StandardOutput=append:/var/log/ecommerce/django.log
 StandardError=append:/var/log/ecommerce/django.log
@@ -124,25 +202,6 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# Wait for database to be ready
-wait_for_database
-
-# Database setup with retry
-echo "Setting up database..."
-retry_command python manage.py makemigrations account
-retry_command python manage.py makemigrations payments
-retry_command python manage.py makemigrations product
-retry_command python manage.py migrate
-
-# Migrate data with error handling
-echo "Migrating data..."
-if python manage.py dumpdata --database=sqlite --natural-foreign --natural-primary -e contenttypes -e auth.Permission --indent 4 > datadump.json; then
-    retry_command python manage.py loaddata datadump.json
-else
-    echo "Error: Failed to dump data from SQLite"
-    exit 1
-fi
 
 # Start services
 echo "Starting services..."
