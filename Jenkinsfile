@@ -122,12 +122,12 @@ pipeline {
                             try {
                                 def exitCode = sh(
                                     script: """
-                                        export AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY}
-                                        export AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_KEY}
-                                        export TF_VAR_db_password=\${DB_PASSWORD}
+                                        export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY}
+                                        export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_KEY}
+                                        export TF_VAR_db_password=${DB_PASSWORD}
                                         terraform plan -input=false -detailed-exitcode \\
                                         -out=plan.tfplan \\
-                                        -var="NODE_EXPORTER_VERSION=\${NODE_EXPORTER_VERSION}"
+                                        -var="NODE_EXPORTER_VERSION=${NODE_EXPORTER_VERSION}"
                                     """,
                                     returnStatus: true
                                 )
