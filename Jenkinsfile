@@ -8,8 +8,6 @@ pipeline {
         FRONTEND_DIR = 'frontend'
         TERRAFORM_VERSION = '1.9.8'
         NODE_EXPORTER_VERSION = '1.8.2'
-        DB_CONNECTION_ATTEMPTS = '10' // Reduced from 30 to 10
-        DB_CONNECTION_SLEEP = '10'    // Seconds to sleep between attempts
     }
 
     parameters {
@@ -92,7 +90,7 @@ pipeline {
                             echo "Installing Node.js LTS..."
                             curl -fsSL https://deb.nodesource.com/setup_lts.x > setup_node.sh
                             DEBIAN_FRONTEND=noninteractive sudo -E bash setup_node.sh
-                            sudo apt-get install -y nodejs
+                            sudo apt-get install -y nodejs git
                             echo "Building frontend application..."
                             cd ${FRONTEND_DIR}
                             export NODE_OPTIONS=--openssl-legacy-provider
@@ -243,7 +241,11 @@ pipeline {
                                 echo "Retrieving RDS endpoint from Terraform outputs..."
                                 cd ${TERRAFORM_DIR}
                                 RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
+                                # Extract hostname without port number
+                                RDS_HOST=$(echo $RDS_ENDPOINT | cut -d':' -f1)
                                 cd ..
+                                
+                                echo "RDS Host: $RDS_HOST (without port)"
                                 
                                 echo "Activating Python virtual environment..."
                                 source ${PYTHON_VENV}/bin/activate
@@ -253,36 +255,34 @@ pipeline {
                                 cp my_project/settings.py my_project/settings.py.bak
                                 
                                 echo "Configuring dual database setup for migration..."
-                                sed -i "s|DATABASES = {|DATABASES = {\\\"sqlite\\\": {\\\"ENGINE\\\": \\\"django.db.backends.sqlite3\\\",\\\"NAME\\\": str(BASE_DIR / \\\"db.sqlite3\\\"),}, \\\"default\\\": {\\\"ENGINE\\\": \\\"django.db.backends.postgresql\\\",\\\"NAME\\\": \\\"ecommercedb\\\",\\\"USER\\\": \\\"kurac5user\\\",\\\"PASSWORD\\\": \\\"$DB_PASSWORD\\\",\\\"HOST\\\": \\\"$RDS_ENDPOINT\\\",\\\"PORT\\\": \\\"5432\\\"},|g" my_project/settings.py
+                                sed -i "s|DATABASES = {|DATABASES = {\\\"sqlite\\\": {\\\"ENGINE\\\": \\\"django.db.backends.sqlite3\\\",\\\"NAME\\\": str(BASE_DIR / \\\"db.sqlite3\\\"),}, \\\"default\\\": {\\\"ENGINE\\\": \\\"django.db.backends.postgresql\\\",\\\"NAME\\\": \\\"ecommercedb\\\",\\\"USER\\\": \\\"kurac5user\\\",\\\"PASSWORD\\\": \\\"$DB_PASSWORD\\\",\\\"HOST\\\": \\\"$RDS_HOST\\\",\\\"PORT\\\": \\\"5432\\\"},|g" my_project/settings.py
                                 
                                 echo "Installing psycopg2 if not already installed..."
                                 pip install psycopg2-binary
                                 
                                 echo "Waiting for database connection..."
-                                for i in $(seq 1 ${DB_CONNECTION_ATTEMPTS}); do
-                                    python - <<END
+                                for i in {1..30}; do
+                                    if python -c "
 import psycopg2
-import sys
 try:
     conn = psycopg2.connect(
         dbname='ecommercedb',
         user='kurac5user',
         password='$DB_PASSWORD',
-        host='$RDS_ENDPOINT',
+        host='$RDS_HOST',
         port='5432'
     )
     conn.close()
-    sys.exit(0)
+    print('Database connection successful!')
+    exit(0)
 except Exception as e:
     print(f'Connection failed: {e}')
-    sys.exit(1)
-END
-                                    if [ $? -eq 0 ]; then
-                                        echo "Database connection successful!"
+    exit(1)
+"; then
                                         break
                                     fi
-                                    echo "Waiting for database connection... Attempt $i/${DB_CONNECTION_ATTEMPTS}"
-                                    sleep ${DB_CONNECTION_SLEEP}
+                                    echo "Waiting for database connection... Attempt $i/30"
+                                    sleep 10
                                 done
                                 
                                 echo "Applying database migrations..."
@@ -312,7 +312,7 @@ print(f'Successfully migrated {users.count()} users')
                                 mv my_project/settings.py.bak my_project/settings.py
                                 
                                 echo "Updating settings to use PostgreSQL only..."
-                                sed -i "s|DATABASES = {|DATABASES = {\\\"default\\\": {\\\"ENGINE\\\": \\\"django.db.backends.postgresql\\\",\\\"NAME\\\": \\\"ecommercedb\\\",\\\"USER\\\": \\\"kurac5user\\\",\\\"PASSWORD\\\": \\\"$DB_PASSWORD\\\",\\\"HOST\\\": \\\"$RDS_ENDPOINT\\\",\\\"PORT\\\": \\\"5432\\\"},|g" my_project/settings.py
+                                sed -i "s|DATABASES = {|DATABASES = {\\\"default\\\": {\\\"ENGINE\\\": \\\"django.db.backends.postgresql\\\",\\\"NAME\\\": \\\"ecommercedb\\\",\\\"USER\\\": \\\"kurac5user\\\",\\\"PASSWORD\\\": \\\"$DB_PASSWORD\\\",\\\"HOST\\\": \\\"$RDS_HOST\\\",\\\"PORT\\\": \\\"5432\\\"},|g" my_project/settings.py
                                 
                                 echo "Database migration completed successfully!"
                             '''
@@ -334,14 +334,23 @@ print(f'Successfully migrated {users.count()} users')
                             cd ${TERRAFORM_DIR}
                             ALB_DNS=$(terraform output -raw alb_dns_name)
                             cd ..
+                            
+                            echo "ALB DNS: $ALB_DNS"
                             echo "Checking if the application is responding with HTTP 200..."
+                            
                             timeout 300 bash -c '
-                                while [[ "$(curl -s -o /dev/null -w "%{http_code}" http://'$ALB_DNS')" != "200" ]]; do
+                                while true; do
+                                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://'$ALB_DNS')
+                                    echo "Current HTTP response code: $HTTP_CODE"
+                                    if [ "$HTTP_CODE" = "200" ]; then
+                                        echo "Application is ready!"
+                                        break
+                                    fi
                                     echo "Waiting for application to be ready..."
                                     sleep 5
                                 done
                             '
-                            echo "Deployment verified successfully: Application is up and running."
+                            echo "Deployment verified successfully: Application is up and running at http://$ALB_DNS"
                         '''
                     } catch (e) {
                         error "Deployment verification failed: ${e.getMessage()}"
