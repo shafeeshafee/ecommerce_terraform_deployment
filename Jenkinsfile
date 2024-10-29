@@ -113,21 +113,29 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 withCredentials([
-                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'aws_access_key'),
-                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'aws_secret_key'),
-                    string(credentialsId: 'DB_PASSWORD', variable: 'db_password')
+                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY'),
+                    string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')
                 ]) {
                     dir(TERRAFORM_DIR) {
                         script {
                             try {
-                                sh """
-                                    terraform plan -input=false -detailed-exitcode \\
-                                    -out=plan.tfplan \\
-                                    -var="aws_access_key=${aws_access_key}" \\
-                                    -var="aws_secret_key=${aws_secret_key}" \\
-                                    -var="db_password=${db_password}" \\
-                                    -var="NODE_EXPORTER_VERSION=${NODE_EXPORTER_VERSION}"
-                                """
+                                def exitCode = sh(
+                                    script: """
+                                        export AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY}
+                                        export AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_KEY}
+                                        export TF_VAR_db_password=\${DB_PASSWORD}
+                                        terraform plan -input=false -detailed-exitcode \\
+                                        -out=plan.tfplan \\
+                                        -var="NODE_EXPORTER_VERSION=\${NODE_EXPORTER_VERSION}"
+                                    """,
+                                    returnStatus: true
+                                )
+                                if (exitCode == 0 || exitCode == 2) {
+                                    echo "Terraform plan completed successfully with exit code ${exitCode}"
+                                } else {
+                                    error "Terraform planning failed with exit code ${exitCode}"
+                                }
                             } catch (Exception e) {
                                 error "Terraform planning failed: ${e.getMessage()}"
                             }
@@ -154,7 +162,7 @@ pipeline {
         stage('Configure Database') {
             steps {
                 withCredentials([
-                    string(credentialsId: 'DB_PASSWORD', variable: 'db_password')
+                    string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')
                 ]) {
                     script {
                         try {
@@ -174,7 +182,7 @@ pipeline {
                                     --natural-foreign --natural-primary \
                                     -e contenttypes -e auth.Permission --indent 4 > datadump.json
                                 echo "Updating database settings for PostgreSQL..."
-                                sed -i 's/DATABASES = {/DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql","NAME": "ecommercedb","USER": "kurac5user","PASSWORD": "'$db_password'","HOST": "'$RDS_ENDPOINT'","PORT": "5432"},/g' my_project/settings.py
+                                sed -i 's/DATABASES = {/DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql","NAME": "ecommercedb","USER": "kurac5user","PASSWORD": "'$DB_PASSWORD'","HOST": "'$RDS_ENDPOINT'","PORT": "5432"},/g' my_project/settings.py
                                 echo "Applying database migrations..."
                                 python manage.py makemigrations account payments product
                                 python manage.py migrate
@@ -230,9 +238,9 @@ pipeline {
             script {
                 try {
                     withCredentials([
-                        string(credentialsId: 'AWS_ACCESS_KEY', variable: 'aws_access_key'),
-                        string(credentialsId: 'AWS_SECRET_KEY', variable: 'aws_secret_key'),
-                        string(credentialsId: 'DB_PASSWORD', variable: 'db_password')
+                        string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                        string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY'),
+                        string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')
                     ]) {
                         dir(TERRAFORM_DIR) {
                             echo "Initiating Terraform destroy due to build failure..."
