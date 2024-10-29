@@ -2,21 +2,25 @@ pipeline {
     agent any
 
     environment {
-        PYTHON_VENV = 'wl5_venv'
-        TERRAFORM_DIR = 'Terraform'
-        BACKEND_DIR = 'backend'
-        FRONTEND_DIR = 'frontend'
-        TERRAFORM_VERSION = '1.9.8'
+        PYTHON_VENV          = 'wl5_venv'
+        TERRAFORM_DIR        = 'Terraform'
+        BACKEND_DIR          = 'backend'
+        FRONTEND_DIR         = 'frontend'
+        TERRAFORM_VERSION    = '1.9.8'
         NODE_EXPORTER_VERSION = '1.8.2'
     }
 
     parameters {
-        booleanParam(name: 'DESTROY_INFRASTRUCTURE', defaultValue: false, description: 'Destroy all infrastructure')
+        booleanParam(
+            name: 'DESTROY_INFRASTRUCTURE',
+            defaultValue: false,
+            description: 'Destroy all infrastructure'
+        )
     }
 
     options {
-        timeout(time: 2, unit: 'HOURS')  // Limit pipeline execution time
-        disableConcurrentBuilds()        // Only one build runs at a time
+        timeout(time: 2, unit: 'HOURS')        // Limit pipeline execution time
+        disableConcurrentBuilds()              // Only one build runs at a time
     }
 
     stages {
@@ -49,31 +53,31 @@ pipeline {
             }
         }
 
-    stage('Validate Environment') {
-        steps {
-            script {
-                // Basic tool validation
-                sh '''
-                    python3.9 --version || { echo "Python 3.9 is required"; exit 1; }
-                    node --version || { echo "Node.js is required"; exit 1; }
-                    terraform version || { echo "Terraform is required"; exit 1; }
-                    aws --version || { echo "AWS CLI is required"; exit 1; }
-                '''
-                
-                // AWS validation with credentials
-                withCredentials([
-                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
-                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY')
-                ]) {
+        stage('Validate Environment') {
+            steps {
+                script {
+                    // Basic tool validation
                     sh '''
-                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
-                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
-                        aws ec2 describe-key-pairs --key-name workload-5-key-shaf || { echo "AWS key pair 'workload-5-key-shaf' is required"; exit 1; }
+                        python3.9 --version || { echo "Python 3.9 is required"; exit 1; }
+                        node --version || { echo "Node.js is required"; exit 1; }
+                        terraform version || { echo "Terraform is required"; exit 1; }
+                        aws --version || { echo "AWS CLI is required"; exit 1; }
                     '''
+
+                    // AWS validation with credentials
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                        string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY')
+                    ]) {
+                        sh '''
+                            export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                            export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+                            aws ec2 describe-key-pairs --key-name workload-5-key-shaf || { echo "AWS key pair 'workload-5-key-shaf' is required"; exit 1; }
+                        '''
+                    }
                 }
             }
         }
-    }
 
         stage('Build') {
             steps {
@@ -84,13 +88,16 @@ pipeline {
                             echo "Setting up Python virtual environment..."
                             python3.9 -m venv ${PYTHON_VENV}
                             source ${PYTHON_VENV}/bin/activate
+
                             echo "Installing backend dependencies..."
                             pip install --upgrade pip
                             pip install -r ${BACKEND_DIR}/requirements.txt
+
                             echo "Installing Node.js LTS..."
                             curl -fsSL https://deb.nodesource.com/setup_lts.x > setup_node.sh
                             DEBIAN_FRONTEND=noninteractive sudo -E bash setup_node.sh
                             sudo apt-get install -y nodejs
+
                             echo "Building frontend application..."
                             cd ${FRONTEND_DIR}
                             export NODE_OPTIONS=--openssl-legacy-provider
@@ -114,8 +121,10 @@ pipeline {
                             set -e
                             echo "Activating Python virtual environment..."
                             source ${PYTHON_VENV}/bin/activate
+
                             echo "Installing testing tools..."
                             pip install pytest-django pytest-cov
+
                             echo "Running backend tests with coverage..."
                             cd ${BACKEND_DIR}
                             mkdir -p ../test-reports
@@ -126,6 +135,7 @@ pipeline {
                                 --cov=. \
                                 --cov-report=xml:../test-reports/coverage.xml
                             cd ..
+
                             echo "Running frontend tests..."
                             cd ${FRONTEND_DIR}
                             npm test -- --ci --coverage || echo "No frontend tests configured"
@@ -202,15 +212,12 @@ pipeline {
                     dir(TERRAFORM_DIR) {
                         script {
                             try {
-                                sh(
-                                    script: '''
-                                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
-                                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
-                                        export TF_VAR_db_password=$DB_PASSWORD
-                                        terraform apply -input=false -auto-approve plan.tfplan
-                                    ''',
-                                    shell: '/bin/bash'
-                                )
+                                sh '''
+                                    export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                                    export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+                                    export TF_VAR_db_password=$DB_PASSWORD
+                                    terraform apply -input=false -auto-approve plan.tfplan
+                                '''
                             } catch (Exception e) {
                                 error "Terraform apply failed: ${e.getMessage()}"
                             }
@@ -231,39 +238,91 @@ pipeline {
                         try {
                             sh '''#!/bin/bash
                                 set -e
+
                                 # Set AWS credentials for CLI
                                 export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
                                 export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
-                                
+
                                 echo "Waiting for RDS instance to become available..."
                                 aws rds wait db-instance-available --db-instance-identifier ecommerce-db
-                                
+
                                 echo "Retrieving RDS endpoint from Terraform outputs..."
                                 cd ${TERRAFORM_DIR}
                                 RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
                                 cd ..
-                                
+
                                 echo "Activating Python virtual environment..."
                                 source ${PYTHON_VENV}/bin/activate
                                 cd ${BACKEND_DIR}
-                                
-                                echo "Exporting existing database data..."
-                                python manage.py dumpdata --database=sqlite \
-                                    --natural-foreign --natural-primary \
-                                    -e contenttypes -e auth.Permission --indent 4 > datadump.json
-                                    
-                                echo "Updating database settings for PostgreSQL..."
-                                sed -i 's/DATABASES = {/DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql","NAME": "ecommercedb","USER": "kurac5user","PASSWORD": "'$DB_PASSWORD'","HOST": "'$RDS_ENDPOINT'","PORT": "5432"},/g' my_project/settings.py
-                                
+
+                                echo "Backing up SQLite database configuration..."
+                                cp my_project/settings.py my_project/settings.py.bak
+
+                                echo "Configuring dual database setup for migration..."
+                                sed -i 's/DATABASES = {/DATABASES = {\"sqlite\": {\"ENGINE\": \"django.db.backends.sqlite3\",\"NAME\": str(BASE_DIR \/ \"db.sqlite3\"),}, \"default\": {\"ENGINE\": \"django.db.backends.postgresql\",\"NAME\": \"ecommercedb\",\"USER\": \"kurac5user\",\"PASSWORD\": \"'$DB_PASSWORD'\",\"HOST\": \"'$RDS_ENDPOINT'\",\"PORT\": \"5432\"},/g' my_project/settings.py
+
+                                echo "Installing psycopg2 if not already installed..."
+                                pip install psycopg2-binary
+
+                                echo "Waiting for database connection..."
+                                for i in {1..30}; do
+                                    if python -c "
+                                    import psycopg2
+                                    try:
+                                        conn = psycopg2.connect(
+                                            dbname='ecommercedb',
+                                            user='kurac5user',
+                                            password='$DB_PASSWORD',
+                                            host='$RDS_ENDPOINT',
+                                            port='5432'
+                                        )
+                                        conn.close()
+                                        exit(0)
+                                    except:
+                                        exit(1)
+                                    "; then
+                                        echo "Database connection successful!"
+                                        break
+                                    fi
+                                    echo "Waiting for database connection... Attempt $i/30"
+                                    sleep 10
+                                done
+
                                 echo "Applying database migrations..."
                                 python manage.py makemigrations account payments product
                                 python manage.py migrate
-                                
-                                echo "Importing data into the new database..."
+
+                                echo "Exporting data from SQLite..."
+                                python manage.py dumpdata --database=sqlite \
+                                    --natural-foreign --natural-primary \
+                                    -e contenttypes -e auth.Permission \
+                                    -e sessions.session \
+                                    --indent 4 > datadump.json
+
+                                echo "Loading data into PostgreSQL..."
                                 python manage.py loaddata datadump.json
+
+                                echo "Verifying data migration..."
+                                # Test query to ensure data was migrated
+                                python -c "
+                                    import django
+                                    django.setup()
+                                    from django.contrib.auth.models import User
+                                    users = User.objects.all()
+                                    print(f'Successfully migrated {users.count()} users')
+                                "
+
+                                echo "Restoring original settings file..."
+                                mv my_project/settings.py.bak my_project/settings.py
+
+                                echo "Updating settings to use PostgreSQL only..."
+                                sed -i 's/DATABASES = {/DATABASES = {\"default\": {\"ENGINE\": \"django.db.backends.postgresql\",\"NAME\": \"ecommercedb\",\"USER\": \"kurac5user\",\"PASSWORD\": \"'$DB_PASSWORD'\",\"HOST\": \"'$RDS_ENDPOINT'\",\"PORT\": \"5432\"},/g' my_project/settings.py
+
+                                echo "Database migration completed successfully!"
                             '''
                         } catch (Exception e) {
                             error "Database configuration failed: ${e.getMessage()}"
+                            currentBuild.result = 'FAILURE'
                         }
                     }
                 }
@@ -276,10 +335,12 @@ pipeline {
                     try {
                         sh '''#!/bin/bash
                             set -e
+
                             echo "Fetching ALB DNS from Terraform..."
                             cd ${TERRAFORM_DIR}
                             ALB_DNS=$(terraform output -raw alb_dns_name)
                             cd ..
+
                             echo "Checking if the application is responding with HTTP 200..."
                             timeout 300 bash -c '
                                 while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' http://${ALB_DNS})" != "200" ]]; do
@@ -287,6 +348,7 @@ pipeline {
                                     sleep 5
                                 done
                             '
+
                             echo "Deployment verified successfully: Application is up and running."
                         '''
                     } catch (Exception e) {
@@ -322,17 +384,17 @@ pipeline {
                                 export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
                                 export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
                                 export TF_VAR_db_password=$DB_PASSWORD
-                                
+
                                 # Initialize Terraform if needed
                                 terraform init -input=false
-                                
+
                                 # Run destroy with timeout
                                 timeout 20m terraform destroy -auto-approve || {
                                     echo "First destroy attempt failed, waiting 30 seconds and trying again..."
                                     sleep 30
                                     terraform destroy -auto-approve
                                 }
-                                
+
                                 # Verify all resources are destroyed
                                 terraform show || echo "No state file found - resources likely destroyed"
                             '''
@@ -349,10 +411,12 @@ pipeline {
             }
         }
         cleanup {
-            cleanWs(cleanWhenNotBuilt: false,
-                   deleteDirs: true,
-                   disableDeferredWipeout: true,
-                   notFailBuild: true)
+            cleanWs(
+                cleanWhenNotBuilt: false,
+                deleteDirs: true,
+                disableDeferredWipeout: true,
+                notFailBuild: true
+            )
         }
     }
 }
