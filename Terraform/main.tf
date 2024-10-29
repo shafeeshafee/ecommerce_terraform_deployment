@@ -356,8 +356,10 @@ resource "aws_instance" "ecommerce_frontend_az1" {
   associate_public_ip_address = true
 
   user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
-    backend_private_ip = aws_instance.ecommerce_backend_az1.private_ip
+    backend_private_ip    = aws_instance.ecommerce_backend_az1.private_ip
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION # Added variable
   })
+
 
   tags = {
     Name = "ecommerce_frontend_az1"
@@ -376,8 +378,10 @@ resource "aws_instance" "ecommerce_frontend_az2" {
   associate_public_ip_address = true
 
   user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
-    backend_private_ip = aws_instance.ecommerce_backend_az2.private_ip
+    backend_private_ip    = aws_instance.ecommerce_backend_az2.private_ip
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION # Added variable
   })
+
 
   tags = {
     Name = "ecommerce_frontend_az2"
@@ -396,11 +400,13 @@ resource "aws_instance" "ecommerce_backend_az1" {
   vpc_security_group_ids = [aws_security_group.backend_security_group.id]
 
   user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
-    db_name      = var.db_name
-    db_username  = var.db_username
-    db_password  = var.db_password
-    rds_endpoint = aws_db_instance.postgres_db.address
+    db_name               = var.db_name
+    db_username           = var.db_username
+    db_password           = var.db_password
+    rds_endpoint          = aws_db_instance.postgres_db.address
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
   })
+
 
   tags = {
     Name = "ecommerce_backend_az1"
@@ -418,11 +424,13 @@ resource "aws_instance" "ecommerce_backend_az2" {
   vpc_security_group_ids = [aws_security_group.backend_security_group.id]
 
   user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
-    db_name      = var.db_name
-    db_username  = var.db_username
-    db_password  = var.db_password
-    rds_endpoint = aws_db_instance.postgres_db.address
+    db_name               = var.db_name
+    db_username           = var.db_username
+    db_password           = var.db_password
+    rds_endpoint          = aws_db_instance.postgres_db.address
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
   })
+
 
   tags = {
     Name = "ecommerce_backend_az2"
