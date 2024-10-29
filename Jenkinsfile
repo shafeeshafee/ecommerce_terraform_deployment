@@ -8,6 +8,8 @@ pipeline {
         FRONTEND_DIR = 'frontend'
         TERRAFORM_VERSION = '1.9.8'
         NODE_EXPORTER_VERSION = '1.8.2'
+        DB_CONNECTION_ATTEMPTS = '10' // Reduced from 30 to 10
+        DB_CONNECTION_SLEEP = '10'    // Seconds to sleep between attempts
     }
 
     parameters {
@@ -257,28 +259,30 @@ pipeline {
                                 pip install psycopg2-binary
                                 
                                 echo "Waiting for database connection..."
-                                for i in {1..30}; do
-                                    if python -c "
-        import psycopg2
-        try:
-            conn = psycopg2.connect(
-                dbname='ecommercedb',
-                user='kurac5user',
-                password='$DB_PASSWORD',
-                host='$RDS_ENDPOINT',
-                port='5432'
-            )
-            conn.close()
-            exit(0)
-        except Exception as e:
-            print(f'Connection failed: {e}')
-            exit(1)
-        "; then
+                                for i in $(seq 1 ${DB_CONNECTION_ATTEMPTS}); do
+                                    python - <<END
+import psycopg2
+import sys
+try:
+    conn = psycopg2.connect(
+        dbname='ecommercedb',
+        user='kurac5user',
+        password='$DB_PASSWORD',
+        host='$RDS_ENDPOINT',
+        port='5432'
+    )
+    conn.close()
+    sys.exit(0)
+except Exception as e:
+    print(f'Connection failed: {e}')
+    sys.exit(1)
+END
+                                    if [ $? -eq 0 ]; then
                                         echo "Database connection successful!"
                                         break
                                     fi
-                                    echo "Waiting for database connection... Attempt $i/30"
-                                    sleep 10
+                                    echo "Waiting for database connection... Attempt $i/${DB_CONNECTION_ATTEMPTS}"
+                                    sleep ${DB_CONNECTION_SLEEP}
                                 done
                                 
                                 echo "Applying database migrations..."
@@ -297,12 +301,12 @@ pipeline {
                                 
                                 echo "Verifying data migration..."
                                 python -c "
-        import django
-        django.setup()
-        from django.contrib.auth.models import User
-        users = User.objects.all()
-        print(f'Successfully migrated {users.count()} users')
-        "
+import django
+django.setup()
+from django.contrib.auth.models import User
+users = User.objects.all()
+print(f'Successfully migrated {users.count()} users')
+"
                                 
                                 echo "Restoring original settings file..."
                                 mv my_project/settings.py.bak my_project/settings.py
