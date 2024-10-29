@@ -83,7 +83,7 @@ variable "db_username" {
 variable "db_password" {
   description = "Password for the master DB user"
   type        = string
-  default     = "kurac5password"
+  sensitive   = true
 }
 
 # Tags
@@ -94,4 +94,11 @@ variable "project_tags" {
     Project     = "ecommerce"
     Environment = "development"
   }
+}
+
+# Node Exporter Variables
+variable "NODE_EXPORTER_VERSION" {
+  description = "Version of Node Exporter to install"
+  type        = string
+  default     = "1.8.2"
 }
