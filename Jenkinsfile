@@ -147,12 +147,26 @@ pipeline {
 
         stage('Terraform Apply') {
             steps {
-                dir(TERRAFORM_DIR) {
-                    script {
-                        try {
-                            sh 'terraform apply -input=false -auto-approve plan.tfplan'
-                        } catch (Exception e) {
-                            error "Terraform apply failed: ${e.getMessage()}"
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY'),
+                    string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')
+                ]) {
+                    dir(TERRAFORM_DIR) {
+                        script {
+                            try {
+                                sh(
+                                    script: '''
+                                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+                                        export TF_VAR_db_password=$DB_PASSWORD
+                                        terraform apply -input=false -auto-approve plan.tfplan
+                                    ''',
+                                    shell: '/bin/bash'
+                                )
+                            } catch (Exception e) {
+                                error "Terraform apply failed: ${e.getMessage()}"
+                            }
                         }
                     }
                 }
