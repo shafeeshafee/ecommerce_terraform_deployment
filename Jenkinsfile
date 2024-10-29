@@ -2,21 +2,25 @@ pipeline {
     agent any
 
     environment {
-        PYTHON_VENV = 'wl5_venv'
-        TERRAFORM_DIR = 'Terraform'
-        BACKEND_DIR = 'backend'
-        FRONTEND_DIR = 'frontend'
-        TERRAFORM_VERSION = '1.9.8'
+        PYTHON_VENV          = 'wl5_venv'
+        TERRAFORM_DIR        = 'Terraform'
+        BACKEND_DIR          = 'backend'
+        FRONTEND_DIR         = 'frontend'
+        TERRAFORM_VERSION    = '1.9.8'
         NODE_EXPORTER_VERSION = '1.8.2'
     }
 
     parameters {
-        booleanParam(name: 'DESTROY_INFRASTRUCTURE', defaultValue: false, description: 'Destroy all infrastructure')
+        booleanParam(
+            name: 'DESTROY_INFRASTRUCTURE',
+            defaultValue: false,
+            description: 'Destroy all infrastructure'
+        )
     }
 
     options {
-        timeout(time: 2, unit: 'HOURS')  // Limit pipeline execution time
-        disableConcurrentBuilds()        // Only one build runs at a time
+        timeout(time: 2, unit: 'HOURS')        // Limit pipeline execution time
+        disableConcurrentBuilds()              // Only one build runs at a time
     }
 
     stages {
@@ -59,7 +63,7 @@ pipeline {
                         terraform version || { echo "Terraform is required"; exit 1; }
                         aws --version || { echo "AWS CLI is required"; exit 1; }
                     '''
-                    
+
                     // AWS validation with credentials
                     withCredentials([
                         string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
@@ -172,8 +176,8 @@ pipeline {
                                         export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY}
                                         export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_KEY}
                                         export TF_VAR_db_password=${DB_PASSWORD}
-                                        terraform plan -input=false -detailed-exitcode \
-                                        -out=plan.tfplan \
+                                        terraform plan -input=false -detailed-exitcode \\
+                                        -out=plan.tfplan \\
                                         -var="NODE_EXPORTER_VERSION=${NODE_EXPORTER_VERSION}"
                                     """,
                                     returnStatus: true
@@ -241,7 +245,6 @@ pipeline {
                                 echo "Retrieving RDS endpoint from Terraform outputs..."
                                 cd ${TERRAFORM_DIR}
                                 RDS_ENDPOINT=$(terraform output -raw rds_endpoint)
-                                # Extract hostname without port number
                                 RDS_HOST=$(echo $RDS_ENDPOINT | cut -d':' -f1)
                                 cd ..
                                 
@@ -251,39 +254,84 @@ pipeline {
                                 source ${PYTHON_VENV}/bin/activate
                                 cd ${BACKEND_DIR}
                                 
-                                echo "Backing up SQLite database configuration..."
-                                cp my_project/settings.py my_project/settings.py.bak
+                                # Create a temporary settings file for database operations
+                                cat > my_project/temp_settings.py <<EOL
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+SECRET_KEY = 'django-insecure-*7!!kc@bmtx8ngui6lr@xmifmcwm6y%hnbe)rdei(b!ds8t)uq'
+DEBUG = True
+ALLOWED_HOSTS = ['*']
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'rest_framework',
+    'corsheaders',
+    'product',
+    'payments',
+    'account',
+]
+
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+ROOT_URLCONF = 'my_project.urls'
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'ecommercedb',
+        'USER': 'kurac5user',
+        'PASSWORD': '$DB_PASSWORD',
+        'HOST': '$RDS_HOST',
+        'PORT': '5432',
+    },
+    'sqlite': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [],
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
+        },
+    },
+]
+
+STATIC_URL = '/static/'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+EOL
                                 
-                                echo "Configuring dual database setup for migration..."
-                                sed -i "s|DATABASES = {|DATABASES = {\\\"sqlite\\\": {\\\"ENGINE\\\": \\\"django.db.backends.sqlite3\\\",\\\"NAME\\\": str(BASE_DIR / \\\"db.sqlite3\\\"),}, \\\"default\\\": {\\\"ENGINE\\\": \\\"django.db.backends.postgresql\\\",\\\"NAME\\\": \\\"ecommercedb\\\",\\\"USER\\\": \\\"kurac5user\\\",\\\"PASSWORD\\\": \\\"$DB_PASSWORD\\\",\\\"HOST\\\": \\\"$RDS_HOST\\\",\\\"PORT\\\": \\\"5432\\\"},|g" my_project/settings.py
+                                echo "Setting Django settings module..."
+                                export DJANGO_SETTINGS_MODULE=my_project.temp_settings
+                                export PYTHONPATH=$PWD:$PYTHONPATH
                                 
                                 echo "Installing psycopg2 if not already installed..."
                                 pip install psycopg2-binary
-                                
-                                echo "Waiting for database connection..."
-                                for i in {1..5}; do
-                                    if python -c "
-import psycopg2
-try:
-    conn = psycopg2.connect(
-        dbname='ecommercedb',
-        user='kurac5user',
-        password='$DB_PASSWORD',
-        host='$RDS_HOST',
-        port='5432'
-    )
-    conn.close()
-    print('Database connection successful!')
-    exit(0)
-except Exception as e:
-    print(f'Connection failed: {e}')
-    exit(1)
-"; then
-                                        break
-                                    fi
-                                    echo "Waiting for database connection... Attempt $i/5"
-                                    sleep 10
-                                done
                                 
                                 echo "Applying database migrations..."
                                 python manage.py makemigrations account payments product
@@ -300,19 +348,23 @@ except Exception as e:
                                 python manage.py loaddata datadump.json
                                 
                                 echo "Verifying data migration..."
-                                python -c "
+                                cat <<EOL | python
+import os
 import django
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_project.temp_settings')
 django.setup()
+
 from django.contrib.auth.models import User
 users = User.objects.all()
 print(f'Successfully migrated {users.count()} users')
-"
+if users.count() == 0:
+    exit(1)
+EOL
                                 
-                                echo "Restoring original settings file..."
-                                mv my_project/settings.py.bak my_project/settings.py
-                                
-                                echo "Updating settings to use PostgreSQL only..."
-                                sed -i "s|DATABASES = {|DATABASES = {\\\"default\\\": {\\\"ENGINE\\\": \\\"django.db.backends.postgresql\\\",\\\"NAME\\\": \\\"ecommercedb\\\",\\\"USER\\\": \\\"kurac5user\\\",\\\"PASSWORD\\\": \\\"$DB_PASSWORD\\\",\\\"HOST\\\": \\\"$RDS_HOST\\\",\\\"PORT\\\": \\\"5432\\\"},|g" my_project/settings.py
+                                echo "Cleaning up temporary files..."
+                                rm -f my_project/temp_settings.py
+                                rm -f datadump.json
                                 
                                 echo "Database migration completed successfully!"
                             '''
@@ -414,10 +466,12 @@ print(f'Successfully migrated {users.count()} users')
             }
         }
         cleanup {
-            cleanWs(cleanWhenNotBuilt: false,
-                    deleteDirs: true,
-                    disableDeferredWipeout: true,
-                    notFailBuild: true)
+            cleanWs(
+                cleanWhenNotBuilt: false,
+                deleteDirs: true,
+                disableDeferredWipeout: true,
+                notFailBuild: true
+            )
         }
     }
 }
