@@ -261,7 +261,7 @@ pipeline {
                                 pip install psycopg2-binary
                                 
                                 echo "Waiting for database connection..."
-                                for i in {1..30}; do
+                                for i in {1..5}; do
                                     if python -c "
 import psycopg2
 try:
@@ -281,7 +281,7 @@ except Exception as e:
 "; then
                                         break
                                     fi
-                                    echo "Waiting for database connection... Attempt $i/30"
+                                    echo "Waiting for database connection... Attempt $i/5"
                                     sleep 10
                                 done
                                 
