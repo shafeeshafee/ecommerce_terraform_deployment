@@ -6,7 +6,8 @@ pipeline {
         TERRAFORM_DIR = 'Terraform'
         BACKEND_DIR = 'backend'
         FRONTEND_DIR = 'frontend'
-        TERRAFORM_VERSION = '1.9.8' 
+        TERRAFORM_VERSION = '1.9.8'
+        NODE_EXPORTER_VERSION = '1.8.2'
     }
 
     options {
@@ -119,13 +120,14 @@ pipeline {
                     dir(TERRAFORM_DIR) {
                         script {
                             try {
-                                sh '''
-                                    terraform plan -input=false -detailed-exitcode \
-                                    -out=plan.tfplan \
-                                    -var="aws_access_key=${aws_access_key}" \
-                                    -var="aws_secret_key=${aws_secret_key}" \
-                                    -var="db_password=${db_password}"
-                                '''
+                                sh """
+                                    terraform plan -input=false -detailed-exitcode \\
+                                    -out=plan.tfplan \\
+                                    -var="aws_access_key=${aws_access_key}" \\
+                                    -var="aws_secret_key=${aws_secret_key}" \\
+                                    -var="db_password=${db_password}" \\
+                                    -var="NODE_EXPORTER_VERSION=${NODE_EXPORTER_VERSION}"
+                                """
                             } catch (Exception e) {
                                 error "Terraform planning failed: ${e.getMessage()}"
                             }
