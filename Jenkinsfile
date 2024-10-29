@@ -49,20 +49,31 @@ pipeline {
             }
         }
 
-        stage('Validate Environment') {
-            steps {
-                script {
+    stage('Validate Environment') {
+        steps {
+            script {
+                // Basic tool validation
+                sh '''
+                    python3.9 --version || { echo "Python 3.9 is required"; exit 1; }
+                    node --version || { echo "Node.js is required"; exit 1; }
+                    terraform version || { echo "Terraform is required"; exit 1; }
+                    aws --version || { echo "AWS CLI is required"; exit 1; }
+                '''
+                
+                // AWS validation with credentials
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY')
+                ]) {
                     sh '''
-                        python3.9 --version || { echo "Python 3.9 is required"; exit 1; }
-                        node --version || { echo "Node.js is required"; exit 1; }
-                        terraform version || { echo "Terraform is required"; exit 1; }
-                        aws --version || { echo "AWS CLI is required"; exit 1; }
-                        # Validate AWS key pair
+                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
                         aws ec2 describe-key-pairs --key-name workload-5-key-shaf || { echo "AWS key pair 'workload-5-key-shaf' is required"; exit 1; }
                     '''
                 }
             }
         }
+    }
 
         stage('Build') {
             steps {
