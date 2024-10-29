@@ -10,12 +10,45 @@ pipeline {
         NODE_EXPORTER_VERSION = '1.8.2'
     }
 
+    parameters {
+        booleanParam(name: 'DESTROY_INFRASTRUCTURE', defaultValue: false, description: 'Destroy all infrastructure')
+    }
+
     options {
         timeout(time: 2, unit: 'HOURS')  // Limit pipeline execution time
         disableConcurrentBuilds()        // Only one build runs at a time
     }
 
     stages {
+        stage('Destroy Existing Infrastructure') {
+            when {
+                expression { params.DESTROY_INFRASTRUCTURE == true }
+            }
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
+                    string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY'),
+                    string(credentialsId: 'DB_PASSWORD', variable: 'DB_PASSWORD')
+                ]) {
+                    dir(TERRAFORM_DIR) {
+                        script {
+                            try {
+                                sh '''
+                                    export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                                    export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+                                    export TF_VAR_db_password=$DB_PASSWORD
+                                    terraform init -input=false
+                                    terraform destroy -auto-approve
+                                '''
+                            } catch (Exception e) {
+                                error "Terraform destroy failed: ${e.getMessage()}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Validate Environment') {
             steps {
                 script {
@@ -23,6 +56,9 @@ pipeline {
                         python3.9 --version || { echo "Python 3.9 is required"; exit 1; }
                         node --version || { echo "Node.js is required"; exit 1; }
                         terraform version || { echo "Terraform is required"; exit 1; }
+                        aws --version || { echo "AWS CLI is required"; exit 1; }
+                        # Validate AWS key pair
+                        aws ec2 describe-key-pairs --key-name workload-5-key-shaf || { echo "AWS key pair 'workload-5-key-shaf' is required"; exit 1; }
                     '''
                 }
             }
@@ -240,17 +276,18 @@ pipeline {
 
     post {
         always {
-            cleanWs()
             script {
                 def buildStatus = currentBuild.result ?: 'SUCCESS'
                 def message = "Build ${env.BUILD_NUMBER} - ${buildStatus}\n${env.BUILD_URL}"
                 echo message
-                // Placeholder for external notifications
             }
         }
         failure {
             script {
                 try {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        input message: 'Infrastructure deployment failed. Would you like to destroy the infrastructure? (Timeout in 10 minutes)', ok: 'Destroy'
+                    }
                     withCredentials([
                         string(credentialsId: 'AWS_ACCESS_KEY', variable: 'AWS_ACCESS_KEY'),
                         string(credentialsId: 'AWS_SECRET_KEY', variable: 'AWS_SECRET_KEY'),
@@ -259,15 +296,40 @@ pipeline {
                         dir(TERRAFORM_DIR) {
                             echo "Initiating Terraform destroy due to build failure..."
                             sh '''
-                                terraform init
-                                terraform destroy -auto-approve
+                                export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+                                export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_KEY
+                                export TF_VAR_db_password=$DB_PASSWORD
+                                
+                                # Initialize Terraform if needed
+                                terraform init -input=false
+                                
+                                # Run destroy with timeout
+                                timeout 20m terraform destroy -auto-approve || {
+                                    echo "First destroy attempt failed, waiting 30 seconds and trying again..."
+                                    sleep 30
+                                    terraform destroy -auto-approve
+                                }
+                                
+                                # Verify all resources are destroyed
+                                terraform show || echo "No state file found - resources likely destroyed"
                             '''
                         }
                     }
+                } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                    echo "Destroy skipped by user or timeout"
+                    echo "WARNING: Resources may still exist in AWS - manual cleanup may be required"
                 } catch (Exception e) {
-                    echo "Warning: Terraform destroy encountered an issue: ${e.getMessage()}"
+                    echo "WARNING: Terraform destroy encountered an issue: ${e.getMessage()}"
+                    echo "IMPORTANT: Manual cleanup may be required!"
+                    echo "Resources may still exist in AWS - please check the AWS Console"
                 }
             }
+        }
+        cleanup {
+            cleanWs(cleanWhenNotBuilt: false,
+                   deleteDirs: true,
+                   disableDeferredWipeout: true,
+                   notFailBuild: true)
         }
     }
 }
