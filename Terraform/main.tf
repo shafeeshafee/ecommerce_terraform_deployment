@@ -473,11 +473,15 @@ resource "aws_db_instance" "postgres_db" {
 }
 
 resource "aws_db_subnet_group" "rds_subnet_group" {
-  name       = "rds_subnet_group"
-  subnet_ids = [aws_subnet.private_subnet_az1.id, aws_subnet.private_subnet_az2.id]
+  name_prefix = "rds-subnet-group-"
+  subnet_ids  = [aws_subnet.private_subnet_az1.id, aws_subnet.private_subnet_az2.id]
 
   tags = {
     Name = "RDS subnet group"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
