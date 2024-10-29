@@ -258,21 +258,22 @@ pipeline {
                                 
                                 echo "Waiting for database connection..."
                                 for i in {1..30}; do
-                                    if python -c '
-                                        import psycopg2
-                                        try:
-                                            conn = psycopg2.connect(
-                                                dbname="ecommercedb",
-                                                user="kurac5user",
-                                                password="'$DB_PASSWORD'",
-                                                host="'$RDS_ENDPOINT'",
-                                                port="5432"
-                                            )
-                                            conn.close()
-                                            exit(0)
-                                        except:
-                                            exit(1)
-                                    '; then
+                                    if python -c "
+        import psycopg2
+        try:
+            conn = psycopg2.connect(
+                dbname='ecommercedb',
+                user='kurac5user',
+                password='$DB_PASSWORD',
+                host='$RDS_ENDPOINT',
+                port='5432'
+            )
+            conn.close()
+            exit(0)
+        except Exception as e:
+            print(f'Connection failed: {e}')
+            exit(1)
+        "; then
                                         echo "Database connection successful!"
                                         break
                                     fi
@@ -295,13 +296,13 @@ pipeline {
                                 python manage.py loaddata datadump.json
                                 
                                 echo "Verifying data migration..."
-                                python -c '
-                                    import django
-                                    django.setup()
-                                    from django.contrib.auth.models import User
-                                    users = User.objects.all()
-                                    print(f"Successfully migrated {users.count()} users")
-                                '
+                                python -c "
+        import django
+        django.setup()
+        from django.contrib.auth.models import User
+        users = User.objects.all()
+        print(f'Successfully migrated {users.count()} users')
+        "
                                 
                                 echo "Restoring original settings file..."
                                 mv my_project/settings.py.bak my_project/settings.py
