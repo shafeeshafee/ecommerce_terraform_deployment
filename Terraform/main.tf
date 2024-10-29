@@ -497,6 +497,14 @@ resource "aws_security_group" "rds_sg" {
     security_groups = [aws_security_group.backend_security_group.id]
   }
 
+  ingress {
+    description = "PostgreSQL from Default VPC"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.default.cidr_block]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
