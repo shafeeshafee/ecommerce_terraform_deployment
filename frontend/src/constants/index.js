@@ -1,3 +1,6 @@
+// API 
+export const API_URL = "/api/"
+
 // products list
 export const PRODUCTS_LIST_REQUEST = "PRODUCTS_LIST_REQUEST" 
 export const PRODUCTS_LIST_SUCCESS = "PRODUCTS_LIST_SUCCESS"

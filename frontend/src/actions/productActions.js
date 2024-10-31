@@ -27,7 +27,6 @@ import {
 
 import axios from 'axios'
 
-
 // products list
 export const getProductsList = () => async (dispatch) => {
     try {
@@ -37,19 +36,31 @@ export const getProductsList = () => async (dispatch) => {
 
         // call api
         const { data } = await axios.get("/api/products/")
+        console.log("API Response:", data);
+        
+        // Ensure data is always an array; use fallback for empty or unexpected structures
+        let products = []
+        if (Array.isArray(data)) {
+            products = data
+        } else if (data && Array.isArray(data.products)) {
+            products = data.products
+        } else {
+            console.warn("Unexpected data format from /api/products/:", data);
+        }
 
         dispatch({
             type: PRODUCTS_LIST_SUCCESS,
-            payload: data
+            payload: products
         })
     } catch (error) {
         dispatch({
             type: PRODUCTS_LIST_FAIL,
-            payload: error.message
+            payload: error.response && error.response.data.detail 
+                ? error.response.data.detail 
+                : error.message
         })
     }
 }
-
 
 // product details
 export const getProductDetails = (id) => async (dispatch) => {
@@ -68,15 +79,15 @@ export const getProductDetails = (id) => async (dispatch) => {
     } catch (error) {
         dispatch({
             type: PRODUCT_DETAILS_FAIL,
-            payload: error.message
+            payload: error.response && error.response.data.detail 
+                ? error.response.data.detail 
+                : error.message
         })
     }
 }
 
-
 // create product
 export const createProduct = (product) => async (dispatch, getState) => {
-
     try {
         dispatch({
             type: CREATE_PRODUCT_REQUEST
@@ -108,7 +119,9 @@ export const createProduct = (product) => async (dispatch, getState) => {
     } catch (error) {
         dispatch({
             type: CREATE_PRODUCT_FAIL,
-            payload: error.response && error.response.data.detail ? error.response.data.detail : error.message
+            payload: error.response && error.response.data.detail 
+                ? error.response.data.detail 
+                : error.message
         })
     }
 }
@@ -146,14 +159,15 @@ export const deleteProduct = (id) => async (dispatch, getState) => {
     } catch (error) {
         dispatch({
             type: DELETE_PRODUCT_FAIL,
-            payload: error.response && error.response.data.detail ? error.response.data.detail : error.message
+            payload: error.response && error.response.data.detail 
+                ? error.response.data.detail 
+                : error.message
         })
     }
 }
 
 // update product
 export const updateProduct = (id, product) => async (dispatch, getState) => {
-
     try {
         dispatch({
             type: UPDATE_PRODUCT_REQUEST
@@ -186,15 +200,15 @@ export const updateProduct = (id, product) => async (dispatch, getState) => {
     } catch (error) {
         dispatch({
             type: UPDATE_PRODUCT_FAIL,
-            payload: error.response && error.response.data.detail ? error.response.data.detail : error.message
+            payload: error.response && error.response.data.detail 
+                ? error.response.data.detail 
+                : error.message
         })
     }
 }
 
-
 // change ordered product delivery status
 export const changeDeliveryStatus = (id, product) => async (dispatch, getState) => {
-
     try {
         dispatch({
             type: CHANGE_DELIVERY_STATUS_REQUEST
@@ -227,7 +241,9 @@ export const changeDeliveryStatus = (id, product) => async (dispatch, getState) 
     } catch (error) {
         dispatch({
             type: CHANGE_DELIVERY_STATUS_FAIL,
-            payload: error.response && error.response.data.detail ? error.response.data.detail : error.message
+            payload: error.response && error.response.data.detail 
+                ? error.response.data.detail 
+                : error.message
         })
     }
 }
