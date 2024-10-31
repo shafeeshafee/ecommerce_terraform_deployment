@@ -8,6 +8,22 @@ data "aws_vpc" "default" {
   default = true
 }
 
+# Data source for getting latest Ubuntu AMI
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
 # Get the main route table for the default VPC
 data "aws_route_table" "default_main" {
   vpc_id = data.aws_vpc.default.id
@@ -55,6 +71,11 @@ resource "aws_route_table" "public_rt" {
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
+  }
+
+  route {
+    cidr_block                = data.aws_vpc.default.cidr_block
+    vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
   }
 
   tags = {
@@ -124,6 +145,8 @@ resource "aws_eip" "nat_eip_az1" {
   tags = {
     Name = "nat-eip-az1"
   }
+
+  depends_on = [aws_internet_gateway.igw]
 }
 
 resource "aws_eip" "nat_eip_az2" {
@@ -132,6 +155,8 @@ resource "aws_eip" "nat_eip_az2" {
   tags = {
     Name = "nat-eip-az2"
   }
+
+  depends_on = [aws_internet_gateway.igw]
 }
 
 # NAT Gateways
@@ -142,6 +167,8 @@ resource "aws_nat_gateway" "nat_gateway_az1" {
   tags = {
     Name = "nat-gateway-az1"
   }
+
+  depends_on = [aws_internet_gateway.igw]
 }
 
 resource "aws_nat_gateway" "nat_gateway_az2" {
@@ -151,6 +178,8 @@ resource "aws_nat_gateway" "nat_gateway_az2" {
   tags = {
     Name = "nat-gateway-az2"
   }
+
+  depends_on = [aws_internet_gateway.igw]
 }
 
 # Private Route Tables
@@ -160,6 +189,11 @@ resource "aws_route_table" "private_rt_az1" {
   route {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.nat_gateway_az1.id
+  }
+
+  route {
+    cidr_block                = data.aws_vpc.default.cidr_block
+    vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
   }
 
   tags = {
@@ -173,6 +207,11 @@ resource "aws_route_table" "private_rt_az2" {
   route {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.nat_gateway_az2.id
+  }
+
+  route {
+    cidr_block                = data.aws_vpc.default.cidr_block
+    vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
   }
 
   tags = {
@@ -191,25 +230,6 @@ resource "aws_route_table_association" "private_rt_assoc_az2" {
   route_table_id = aws_route_table.private_rt_az2.id
 }
 
-# VPC Peering Routes in Custom VPC
-resource "aws_route" "custom_vpc_public_rt_to_default_vpc" {
-  route_table_id            = aws_route_table.public_rt.id
-  destination_cidr_block    = data.aws_vpc.default.cidr_block
-  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
-}
-
-resource "aws_route" "custom_vpc_private_rt_az1_to_default_vpc" {
-  route_table_id            = aws_route_table.private_rt_az1.id
-  destination_cidr_block    = data.aws_vpc.default.cidr_block
-  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
-}
-
-resource "aws_route" "custom_vpc_private_rt_az2_to_default_vpc" {
-  route_table_id            = aws_route_table.private_rt_az2.id
-  destination_cidr_block    = data.aws_vpc.default.cidr_block
-  vpc_peering_connection_id = aws_vpc_peering_connection.default_to_custom.id
-}
-
 # VPC Peering Route in Default VPC
 resource "aws_route" "default_vpc_route_to_custom_vpc" {
   route_table_id            = data.aws_route_table.default_main.id
@@ -218,13 +238,46 @@ resource "aws_route" "default_vpc_route_to_custom_vpc" {
 }
 
 # Security Groups
+resource "aws_security_group" "alb_security_group" {
+  name        = "alb-sg"
+  description = "Security group for ALB"
+  vpc_id      = aws_vpc.ecommerce_vpc.id
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS from anywhere"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alb-sg"
+  }
+}
+
 resource "aws_security_group" "frontend_security_group" {
   name        = "frontend-sg"
   description = "Security group for frontend EC2 instances"
   vpc_id      = aws_vpc.ecommerce_vpc.id
 
   ingress {
-    description = "SSH"
+    description = "SSH from anywhere"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -232,11 +285,11 @@ resource "aws_security_group" "frontend_security_group" {
   }
 
   ingress {
-    description = "React"
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "Allow traffic from ALB on port 3000"
+    from_port       = 3000
+    to_port         = 3000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb_security_group.id]
   }
 
   ingress {
@@ -265,7 +318,7 @@ resource "aws_security_group" "backend_security_group" {
   vpc_id      = aws_vpc.ecommerce_vpc.id
 
   ingress {
-    description = "SSH"
+    description = "SSH from anywhere"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -273,11 +326,11 @@ resource "aws_security_group" "backend_security_group" {
   }
 
   ingress {
-    description = "Django"
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description     = "Allow Django traffic from frontend"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [aws_security_group.frontend_security_group.id]
   }
 
   ingress {
@@ -300,197 +353,14 @@ resource "aws_security_group" "backend_security_group" {
   }
 }
 
-# Load Balancer
-resource "aws_lb" "frontend_lb" {
-  name               = "frontend-lb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.frontend_security_group.id]
-  subnets            = [aws_subnet.public_subnet_az1.id, aws_subnet.public_subnet_az2.id]
-
-  tags = {
-    Name = "frontend-lb"
-  }
-}
-
-resource "aws_lb_target_group" "frontend_tg" {
-  name     = "frontend-tg"
-  port     = 3000
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.ecommerce_vpc.id
-
-  health_check {
-    enabled             = true
-    healthy_threshold   = 2
-    interval            = 30
-    matcher             = "200"
-    path                = "/"
-    port                = "traffic-port"
-    protocol            = "HTTP"
-    timeout             = 5
-    unhealthy_threshold = 2
-  }
-}
-
-resource "aws_lb_listener" "frontend_listener" {
-  load_balancer_arn = aws_lb.frontend_lb.arn
-  port              = "80"
-  protocol          = "HTTP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.frontend_tg.arn
-  }
-}
-
-# Frontend EC2 Instances
-resource "aws_instance" "ecommerce_frontend_az1" {
-  ami           = "ami-0c7217cdde317cfec" # Ubuntu 22.04 LTS in us-east-1
-  instance_type = var.instance_type
-  key_name      = var.key_name
-
-  subnet_id                   = aws_subnet.public_subnet_az1.id
-  vpc_security_group_ids      = [aws_security_group.frontend_security_group.id]
-  associate_public_ip_address = true
-
-  user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
-    backend_private_ip    = aws_instance.ecommerce_backend_az1.private_ip
-    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION # Added variable
-  })
-
-
-  tags = {
-    Name = "ecommerce_frontend_az1"
-  }
-
-  depends_on = [aws_instance.ecommerce_backend_az1]
-}
-
-resource "aws_instance" "ecommerce_frontend_az2" {
-  ami           = "ami-0c7217cdde317cfec" # Ubuntu 22.04 LTS in us-east-1
-  instance_type = var.instance_type
-  key_name      = var.key_name
-
-  subnet_id                   = aws_subnet.public_subnet_az2.id
-  vpc_security_group_ids      = [aws_security_group.frontend_security_group.id]
-  associate_public_ip_address = true
-
-  user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
-    backend_private_ip    = aws_instance.ecommerce_backend_az2.private_ip
-    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION # Added variable
-  })
-
-
-  tags = {
-    Name = "ecommerce_frontend_az2"
-  }
-
-  depends_on = [aws_instance.ecommerce_backend_az2]
-}
-
-# Backend EC2 Instances
-resource "aws_instance" "ecommerce_backend_az1" {
-  ami           = "ami-0c7217cdde317cfec" # Ubuntu 22.04 LTS in us-east-1
-  instance_type = var.instance_type
-  key_name      = var.key_name
-
-  subnet_id              = aws_subnet.private_subnet_az1.id
-  vpc_security_group_ids = [aws_security_group.backend_security_group.id]
-
-  user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
-    db_name               = var.db_name
-    db_username           = var.db_username
-    db_password           = var.db_password
-    rds_endpoint          = aws_db_instance.postgres_db.address
-    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
-  })
-
-
-  tags = {
-    Name = "ecommerce_backend_az1"
-  }
-
-  depends_on = [aws_db_instance.postgres_db]
-}
-
-resource "aws_instance" "ecommerce_backend_az2" {
-  ami           = "ami-0c7217cdde317cfec" # Ubuntu 22.04 LTS in us-east-1
-  instance_type = var.instance_type
-  key_name      = var.key_name
-
-  subnet_id              = aws_subnet.private_subnet_az2.id
-  vpc_security_group_ids = [aws_security_group.backend_security_group.id]
-
-  user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
-    db_name               = var.db_name
-    db_username           = var.db_username
-    db_password           = var.db_password
-    rds_endpoint          = aws_db_instance.postgres_db.address
-    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
-  })
-
-
-  tags = {
-    Name = "ecommerce_backend_az2"
-  }
-
-  depends_on = [aws_db_instance.postgres_db]
-}
-
-# Target Group Attachments
-resource "aws_lb_target_group_attachment" "frontend_tg_attachment_1" {
-  target_group_arn = aws_lb_target_group.frontend_tg.arn
-  target_id        = aws_instance.ecommerce_frontend_az1.id
-  port             = 3000
-}
-
-resource "aws_lb_target_group_attachment" "frontend_tg_attachment_2" {
-  target_group_arn = aws_lb_target_group.frontend_tg.arn
-  target_id        = aws_instance.ecommerce_frontend_az2.id
-  port             = 3000
-}
-
-# RDS Database
-resource "aws_db_instance" "postgres_db" {
-  identifier           = "ecommerce-db"
-  engine               = "postgres"
-  engine_version       = "14.13"
-  instance_class       = var.db_instance_class
-  allocated_storage    = 20
-  storage_type         = "standard"
-  db_name              = var.db_name
-  username             = var.db_username
-  password             = var.db_password
-  parameter_group_name = "default.postgres14"
-  skip_final_snapshot  = true
-
-  db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
-  vpc_security_group_ids = [aws_security_group.rds_sg.id]
-
-  tags = {
-    Name = "Ecommerce Postgres DB"
-  }
-}
-
-resource "aws_db_subnet_group" "rds_subnet_group" {
-  name_prefix = "rds-subnet-group-"
-  subnet_ids  = [aws_subnet.private_subnet_az1.id, aws_subnet.private_subnet_az2.id]
-
-  tags = {
-    Name = "RDS subnet group"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
+# RDS Security Group - Define before RDS instance
 resource "aws_security_group" "rds_sg" {
-  name        = "rds_sg"
+  name        = "rds-sg"
   description = "Security group for RDS"
   vpc_id      = aws_vpc.ecommerce_vpc.id
 
   ingress {
+    description     = "PostgreSQL from backend"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
@@ -513,6 +383,202 @@ resource "aws_security_group" "rds_sg" {
   }
 
   tags = {
-    Name = "RDS Security Group"
+    Name = "rds-sg"
   }
+}
+
+# RDS Subnet Group
+resource "aws_db_subnet_group" "rds_subnet_group" {
+  name_prefix = "rds-subnet-group-"
+  subnet_ids  = [aws_subnet.private_subnet_az1.id, aws_subnet.private_subnet_az2.id]
+
+  tags = {
+    Name = "RDS subnet group"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# RDS Instance
+resource "aws_db_instance" "postgres_db" {
+  identifier           = "ecommerce-db"
+  engine               = "postgres"
+  engine_version       = "14.13"
+  instance_class       = var.db_instance_class
+  allocated_storage    = 20
+  storage_type         = "standard"
+  db_name              = var.db_name
+  username             = var.db_username
+  password             = var.db_password
+  parameter_group_name = "default.postgres14"
+  skip_final_snapshot  = true
+
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
+  vpc_security_group_ids = [aws_security_group.rds_sg.id]
+
+  tags = {
+    Name = "Ecommerce Postgres DB"
+  }
+}
+
+# Load Balancer
+resource "aws_lb" "frontend_lb" {
+  name               = "frontend-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_security_group.id]
+  subnets            = [aws_subnet.public_subnet_az1.id, aws_subnet.public_subnet_az2.id]
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "frontend-lb"
+  }
+}
+
+resource "aws_lb_target_group" "frontend_tg" {
+  name     = "frontend-tg"
+  port     = 3000
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.ecommerce_vpc.id
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    interval            = 30
+    matcher             = "200"
+    path                = "/"
+    port                = "3000"
+    protocol            = "HTTP"
+    timeout             = 5
+    unhealthy_threshold = 2
+  }
+
+  tags = {
+    Name = "frontend-tg"
+  }
+}
+
+resource "aws_lb_listener" "frontend_listener" {
+  load_balancer_arn = aws_lb.frontend_lb.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.frontend_tg.arn
+  }
+}
+
+# Backend EC2 Instances - Create these first
+resource "aws_instance" "ecommerce_backend_az1" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+
+  subnet_id              = aws_subnet.private_subnet_az1.id
+  vpc_security_group_ids = [aws_security_group.backend_security_group.id]
+
+  user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
+    db_name               = var.db_name
+    db_username           = var.db_username
+    db_password           = var.db_password
+    rds_endpoint          = aws_db_instance.postgres_db.address
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
+    instance_name         = "ecommerce_backend_az1"
+    allowed_hosts         = aws_lb.frontend_lb.dns_name
+  })
+
+  tags = {
+    Name = "ecommerce_backend_az1"
+  }
+
+  depends_on = [aws_db_instance.postgres_db]
+}
+
+resource "aws_instance" "ecommerce_backend_az2" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+
+  subnet_id              = aws_subnet.private_subnet_az2.id
+  vpc_security_group_ids = [aws_security_group.backend_security_group.id]
+
+  user_data = templatefile("${path.module}/../scripts/backend_user_data.sh", {
+    db_name               = var.db_name
+    db_username           = var.db_username
+    db_password           = var.db_password
+    rds_endpoint          = aws_db_instance.postgres_db.address
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
+    instance_name         = "ecommerce_backend_az2"
+    allowed_hosts         = aws_lb.frontend_lb.dns_name
+  })
+
+  tags = {
+    Name = "ecommerce_backend_az2"
+  }
+
+  depends_on = [aws_db_instance.postgres_db]
+}
+
+# Frontend EC2 Instances - Create these after backends
+resource "aws_instance" "ecommerce_frontend_az1" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+
+  subnet_id                   = aws_subnet.public_subnet_az1.id
+  vpc_security_group_ids      = [aws_security_group.frontend_security_group.id]
+  associate_public_ip_address = true
+
+  user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
+    backend_private_ip    = aws_instance.ecommerce_backend_az1.private_ip
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
+  })
+
+  tags = {
+    Name = "ecommerce_frontend_az1"
+  }
+
+  depends_on = [aws_instance.ecommerce_backend_az1]
+}
+
+resource "aws_instance" "ecommerce_frontend_az2" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+
+  subnet_id                   = aws_subnet.public_subnet_az2.id
+  vpc_security_group_ids      = [aws_security_group.frontend_security_group.id]
+  associate_public_ip_address = true
+
+  user_data = templatefile("${path.module}/../scripts/frontend_user_data.sh", {
+    backend_private_ip    = aws_instance.ecommerce_backend_az2.private_ip
+    NODE_EXPORTER_VERSION = var.NODE_EXPORTER_VERSION
+  })
+
+  tags = {
+    Name = "ecommerce_frontend_az2"
+  }
+
+  depends_on = [aws_instance.ecommerce_backend_az2]
+}
+
+# Target Group Attachments
+resource "aws_lb_target_group_attachment" "frontend_tg_attachment_1" {
+  target_group_arn = aws_lb_target_group.frontend_tg.arn
+  target_id        = aws_instance.ecommerce_frontend_az1.id
+  port             = 3000
+
+  depends_on = [aws_instance.ecommerce_frontend_az1]
+}
+
+resource "aws_lb_target_group_attachment" "frontend_tg_attachment_2" {
+  target_group_arn = aws_lb_target_group.frontend_tg.arn
+  target_id        = aws_instance.ecommerce_frontend_az2.id
+  port             = 3000
+
+  depends_on = [aws_instance.ecommerce_frontend_az2]
 }
