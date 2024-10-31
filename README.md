@@ -90,6 +90,10 @@ This project was about deplyoing a full-stack eCommerce application using Infras
    - Implement ELK stack for log management
    - Set up SNS notifications for critical alerts
 
+## Website
+
+![Ecommerce Site](ecommerce_site.png)
+
 ## Conclusion 🎉
 
 While we encountered some challenges with full automation through Jenkins, we successfully deployed a robust, scalable eCommerce infrastructure using Terraform. The architecture follows AWS best practices for high availability and security, with room for future optimizations and enhancements.
